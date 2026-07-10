@@ -2,14 +2,16 @@ import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { Worker, Job } from 'bullmq';
-import IORedis from 'ioredis';
 import { Repository } from 'typeorm';
 import { AppModule } from '../app.module';
 import { VideoJob } from './video-job.entity';
 import { VIDEO_QUEUE_NAME } from './queue/video-queue.provider';
+import { parseRedisConnection } from '../config/redis.config';
 import { FfmpegService } from '../render/ffmpeg.service';
 import { S3Service } from '../storage/s3.service';
-import { renderNarrationAudio, fetchAvatarClip } from './avatar-provider.stub';
+import { TtsService } from '../ai/tts.service';
+import { LipSyncService } from '../ai/lipsync.service';
+import { CreditsService } from '../credits/credits.service';
 
 /**
  * Standalone BullMQ worker process. Run separately from the HTTP API
@@ -23,11 +25,11 @@ async function bootstrap() {
   );
   const ffmpegService = appContext.get(FfmpegService);
   const s3Service = appContext.get(S3Service);
+  const ttsService = appContext.get(TtsService);
+  const lipSyncService = appContext.get(LipSyncService);
+  const creditsService = appContext.get(CreditsService);
 
-  const connection = new IORedis(
-    process.env.REDIS_URL ?? 'redis://localhost:6379',
-    { maxRetriesPerRequest: null },
-  );
+  const connection = parseRedisConnection(process.env.REDIS_URL ?? 'redis://localhost:6379');
 
   const worker = new Worker(
     VIDEO_QUEUE_NAME,
@@ -41,16 +43,20 @@ async function bootstrap() {
       await videoJobsRepo.save(videoJob);
 
       try {
-        const avatarClipPath = await fetchAvatarClip(videoJob.avatarId);
-        const narrationAudioPath = await renderNarrationAudio(
+        const { audioPath: narrationAudioPath } = await ttsService.synthesize(
           videoJob.script,
           videoJob.voiceId,
+        );
+        const { avatarClipPath } = await lipSyncService.generate(
+          videoJob.avatarId,
+          narrationAudioPath,
         );
 
         const outputPath = await ffmpegService.renderVideo({
           avatarClipPath,
           narrationAudioPath,
           resolution: videoJob.resolution as '1280x720' | '1920x1080' | '3840x2160',
+          watermark: videoJob.watermarked,
         });
 
         const key = `renders/${videoJob.userId}/${videoJob.id}.mp4`;
@@ -62,6 +68,15 @@ async function bootstrap() {
       } catch (err) {
         videoJob.status = 'failed';
         videoJob.errorMessage = err instanceof Error ? err.message : 'Unknown error';
+
+        if (videoJob.creditCost > 0) {
+          await creditsService.refund(
+            videoJob.userId,
+            videoJob.creditCost,
+            videoJob.id,
+            'Refund for failed render',
+          );
+        }
       }
 
       await videoJobsRepo.save(videoJob);

@@ -35,6 +35,12 @@ services:
         generateValue: true
       - key: FRONTEND_URL
         sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_CALLBACK_URL
+        sync: false
       - key: AWS_REGION
         sync: false
       - key: AWS_ACCESS_KEY_ID
@@ -50,8 +56,6 @@ services:
       - key: STRIPE_PRICE_STARTER
         sync: false
       - key: STRIPE_PRICE_PRO
-        sync: false
-      - key: STRIPE_PRICE_BUSINESS
         sync: false
 
   - type: worker
@@ -73,6 +77,8 @@ services:
           name: narrator-redis
           type: redis
           property: connectionString
+      - key: WORKER_CONCURRENCY
+        value: 2
       - key: AWS_REGION
         sync: false
       - key: AWS_ACCESS_KEY_ID
@@ -80,4 +86,8 @@ services:
       - key: AWS_SECRET_ACCESS_KEY
         sync: false
       - key: AWS_S3_BUCKET
+        sync: false
+      - key: AVATAR_PROVIDER_API_KEY
+        sync: false
+      - key: AVATAR_PROVIDER_BASE_URL
         sync: false

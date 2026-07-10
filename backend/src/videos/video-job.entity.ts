@@ -51,6 +51,12 @@ export class VideoJob {
   @Column({ default: 0 })
   progress: number;
 
+  @Column({ default: 0 })
+  creditCost: number;
+
+  @Column({ default: false })
+  watermarked: boolean;
+
   @CreateDateColumn()
   createdAt: Date;
 

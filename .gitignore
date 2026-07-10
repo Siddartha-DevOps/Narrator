@@ -13,3 +13,4 @@ tmp/
 uploads/
 *.pem
 .turbo/
+*.tsbuildinfo

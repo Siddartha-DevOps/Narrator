@@ -9,6 +9,12 @@ import { UsersService } from '../users/users.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 
+interface GoogleProfile {
+  googleId: string;
+  email: string;
+  fullName?: string;
+}
+
 @Injectable()
 export class AuthService {
   constructor(
@@ -34,13 +40,30 @@ export class AuthService {
 
   async login(dto: LoginDto) {
     const user = await this.usersService.findByEmail(dto.email);
-    if (!user) {
+    if (!user || !user.passwordHash) {
       throw new UnauthorizedException('Invalid email or password');
     }
 
     const passwordMatches = await bcrypt.compare(dto.password, user.passwordHash);
     if (!passwordMatches) {
       throw new UnauthorizedException('Invalid email or password');
+    }
+
+    return this.buildAuthResponse(user.id, user.email);
+  }
+
+  async loginWithGoogle(profile: GoogleProfile) {
+    let user = await this.usersService.findByEmail(profile.email);
+
+    if (!user) {
+      user = await this.usersService.create({
+        email: profile.email,
+        fullName: profile.fullName,
+        googleId: profile.googleId,
+      });
+    } else if (!user.googleId) {
+      user.googleId = profile.googleId;
+      user = await this.usersService.save(user);
     }
 
     return this.buildAuthResponse(user.id, user.email);

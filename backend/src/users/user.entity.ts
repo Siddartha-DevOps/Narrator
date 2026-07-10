@@ -17,8 +17,8 @@ export class User {
   @Column({ unique: true })
   email: string;
 
-  @Column()
-  passwordHash: string;
+  @Column({ nullable: true })
+  passwordHash?: string;
 
   @Column({ nullable: true })
   fullName?: string;
@@ -26,14 +26,24 @@ export class User {
   @Column({ default: 'free' })
   planTier: PlanTier;
 
+  @Column({ default: 'user' })
+  role: 'user' | 'admin';
+
+  @Column({ nullable: true, unique: true })
+  googleId?: string;
+
   @Column({ nullable: true })
   stripeCustomerId?: string;
 
   @Column({ nullable: true })
   stripeSubscriptionId?: string;
 
-  @Column({ default: 0 })
-  renderMinutesUsedThisCycle: number;
+  /** Denormalized running balance; source of truth is the credit_transactions ledger. */
+  @Column({ default: 20 })
+  creditBalance: number;
+
+  @Column({ default: false })
+  isSuspended: boolean;
 
   @OneToMany(() => VideoJob, (job) => job.user)
   videoJobs: VideoJob[];

@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import * as ffmpeg from 'fluent-ffmpeg';
+import ffmpeg from 'fluent-ffmpeg';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -12,7 +12,11 @@ export interface RenderInput {
   /** Optional burned-in subtitle (.srt) file */
   subtitlesPath?: string;
   resolution: '1280x720' | '1920x1080' | '3840x2160';
+  /** Burns a "Made with Narrator" watermark into the bottom-right corner — applied for Free-tier renders. */
+  watermark?: boolean;
 }
+
+const WATERMARK_TEXT = 'Made with Narrator';
 
 @Injectable()
 export class FfmpegService {
@@ -23,6 +27,16 @@ export class FfmpegService {
       os.tmpdir(),
       `narrator-${Date.now()}-${Math.random().toString(36).slice(2)}.mp4`,
     );
+
+    const videoFilters: string[] = [];
+    if (input.subtitlesPath && fs.existsSync(input.subtitlesPath)) {
+      videoFilters.push(`subtitles=${input.subtitlesPath}`);
+    }
+    if (input.watermark) {
+      videoFilters.push(
+        `drawtext=text='${WATERMARK_TEXT}':fontcolor=white@0.8:fontsize=24:x=w-tw-20:y=h-th-20:box=1:boxcolor=black@0.4:boxborderw=8`,
+      );
+    }
 
     await new Promise<void>((resolve, reject) => {
       const command = ffmpeg()
@@ -36,13 +50,13 @@ export class FfmpegService {
           '-pix_fmt yuv420p',
         ]);
 
-      if (input.subtitlesPath && fs.existsSync(input.subtitlesPath)) {
-        command.videoFilters(`subtitles=${input.subtitlesPath}`);
+      if (videoFilters.length > 0) {
+        command.videoFilters(videoFilters);
       }
 
       command
-        .on('start', (cmd) => this.logger.debug(`ffmpeg start: ${cmd}`))
-        .on('error', (err) => reject(err))
+        .on('start', (cmd: string) => this.logger.debug(`ffmpeg start: ${cmd}`))
+        .on('error', (err: Error) => reject(err))
         .on('end', () => resolve())
         .save(outputPath);
     });

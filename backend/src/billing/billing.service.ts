@@ -6,6 +6,7 @@ import { Subscription } from './subscription.entity';
 import { User } from '../users/user.entity';
 import { UsersService } from '../users/users.service';
 import { PLANS, PlanTier } from '../config/plans.config';
+import { CreditsService } from '../credits/credits.service';
 
 @Injectable()
 export class BillingService {
@@ -15,6 +16,7 @@ export class BillingService {
     @InjectRepository(Subscription)
     private readonly subscriptionsRepo: Repository<Subscription>,
     private readonly usersService: UsersService,
+    private readonly creditsService: CreditsService,
   ) {}
 
   async createCheckoutSession(user: User, planTier: PlanTier) {
@@ -92,6 +94,26 @@ export class BillingService {
         await this.syncSubscriptionStatus(sub);
         break;
       }
+      case 'invoice.paid': {
+        // Renewal (or first payment) — reset the user's credit balance for
+        // the new billing cycle. Using invoice.paid rather than
+        // checkout.session.completed alone ensures recurring renewals also
+        // grant a fresh allotment, not just the initial subscribe.
+        const invoice = event.data.object as Stripe.Invoice;
+        const subscriptionId = invoice.subscription as string | null;
+        if (subscriptionId) {
+          const subscription = await this.subscriptionsRepo.findOne({
+            where: { stripeSubscriptionId: subscriptionId },
+          });
+          if (subscription) {
+            await this.creditsService.grantMonthlyAllotment(
+              subscription.userId,
+              subscription.planTier,
+            );
+          }
+        }
+        break;
+      }
       default:
         break;
     }
@@ -115,6 +137,8 @@ export class BillingService {
     subscription.planTier = planTier;
     subscription.status = status;
     await this.subscriptionsRepo.save(subscription);
+
+    await this.creditsService.grantMonthlyAllotment(userId, planTier);
 
     const user = await this.usersService.findById(userId);
     if (user) {

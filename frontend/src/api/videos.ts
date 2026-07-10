@@ -9,6 +9,9 @@ export interface VideoJob {
   status: 'queued' | 'processing' | 'completed' | 'failed';
   outputUrl?: string;
   progress: number;
+  creditCost: number;
+  watermarked: boolean;
+  errorMessage?: string;
   createdAt: string;
 }
 

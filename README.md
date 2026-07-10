@@ -1,29 +1,59 @@
 # Narrator
 
 Narrator is an AI avatar video generation SaaS — an alternative to HeyGen, Pictory, and
-Synthesia. Users type a script, pick an avatar and voice, and Narrator renders a talking-head
-video that's stored in S3 and streamed back to the dashboard.
+Synthesia, with first-class support for Hindi, Telugu, and Tamil voices. Users type a script,
+pick an avatar and voice, and Narrator renders a lip-synced talking-head video that's stored in
+S3 and streamed back to the dashboard.
 
-This repository is an MVP scaffold: a simple monolith (frontend + backend + one render worker),
-deliberately without Kubernetes, designed to run on Vercel (frontend) + Render (backend).
+This repository is a complete MVP product: marketing site (landing + pricing), auth (email/
+password + Google OAuth), a credit-based video generation flow, Stripe subscription billing,
+team accounts, and an admin API — built as a simple monolith (frontend + backend + one render
+worker), deliberately without Kubernetes, designed to run on Vercel (frontend) + Render
+(backend).
+
+**Further reading:** [`PRD.md`](./PRD.md) (product scope, user flows, roadmap) ·
+[`ARCHITECTURE.md`](./ARCHITECTURE.md) (system design, data flow) ·
+[`API.md`](./API.md) (endpoint reference) · [`DEPLOYMENT.md`](./DEPLOYMENT.md) (Vercel + Render
+deploy steps).
+
+## What's included
+
+- **Marketing**: Landing page, Pricing page (₹500 Starter / ₹1,500 Pro / Enterprise)
+- **Auth**: email/password (JWT) and "Continue with Google" (OAuth)
+- **Video generation**: script → avatar + voice (English, Hindi, Telugu, Tamil) → resolution →
+  queued render with a live status/preview dashboard
+- **Credits**: every plan grants a monthly credit allotment; renders debit credits by estimated
+  duration × resolution, with automatic refunds on failed renders
+- **Billing**: Stripe Checkout + Billing Portal, webhook-driven plan/credit sync
+- **Teams**: Pro/Enterprise accounts can create a team and invite seats
+- **Compliance**: watermarked output on the Free tier, a pre-render content-policy check, and an
+  AI-generated-content disclosure notice
+- **Admin API**: user list/suspend/plan-override, subscription and platform stats
 
 ## Architecture
 
 ```
-frontend/   React + Vite dashboard (login, script input, video preview, billing)
-backend/    NestJS REST API: auth, video job queue, Stripe billing
-            ├── src/auth       JWT auth (register/login)
-            ├── src/users      User entity + service
-            ├── src/videos     Video job entity, controller, BullMQ producer + worker
-            ├── src/billing    Stripe checkout, billing portal, webhook handling
-            ├── src/storage    S3 upload / signed URLs
-            └── src/render     FFmpeg rendering pipeline
+frontend/   React + Vite + TailwindCSS
+            ├── pages: Landing, Pricing, Login, Signup, AuthCallback, Dashboard,
+            │          VideoEditor, Billing, Profile
+            └── components: Navbar, Footer, PlanCard, AvatarSelector, VoiceSelector,
+                             TextInput, VideoPreview, JobList
+
+backend/    NestJS REST API
+            ├── src/auth        JWT + Google OAuth
+            ├── src/users       User entity + service
+            ├── src/videos      Video job entity, controller, BullMQ producer + worker
+            ├── src/ai          TTS + lip-sync provider wrappers, voice/avatar catalogs
+            ├── src/render      FFmpeg rendering pipeline (+ watermark overlay)
+            ├── src/storage     S3 upload / signed URLs
+            ├── src/credits     Credit ledger (grants/debits/refunds) + balance
+            ├── src/billing     Stripe checkout, billing portal, webhook handling
+            ├── src/teams       Team accounts (Pro/Enterprise), invites, seat limits
+            ├── src/moderation  Pre-render script content-policy check
+            └── src/admin       Role-gated user management + platform stats
 ```
 
-Job flow: dashboard submits a script → API creates a `VideoJob` row and enqueues a BullMQ job →
-a standalone worker process fetches the avatar clip + generates narration audio (pluggable
-provider) → FFmpeg composites the final MP4 → worker uploads to S3 → job status flips to
-`completed` with a signed URL the frontend polls for and plays.
+See [`ARCHITECTURE.md`](./ARCHITECTURE.md) for the full request/data-flow diagrams.
 
 ## Prerequisites
 
@@ -32,6 +62,8 @@ provider) → FFmpeg composites the final MP4 → worker uploads to S3 → job s
 - Redis 7 (or Docker) — powers the BullMQ video render queue
 - FFmpeg installed locally if you want to run the worker outside Docker
 - A Stripe account (test mode is fine) and an AWS S3 bucket
+- (Optional) A Google OAuth client, and TTS/lip-sync provider credentials — everything works
+  with local fallbacks if you skip these for now
 
 The fastest way to get Postgres + Redis running locally is Docker Compose (see below).
 
@@ -46,7 +78,8 @@ cp backend/.env.example backend/.env
 cp frontend/.env.example frontend/.env
 ```
 
-Fill in `backend/.env` with your Stripe test keys, AWS credentials, and an S3 bucket name.
+Fill in `backend/.env` with your Stripe test keys, AWS credentials, and an S3 bucket name. Google
+OAuth and the avatar/TTS provider can stay blank for local development — see below.
 
 ### 2. Start Postgres + Redis
 
@@ -94,6 +127,17 @@ stripe listen --forward-to localhost:4000/api/billing/webhook
 
 Copy the printed webhook signing secret into `backend/.env` as `STRIPE_WEBHOOK_SECRET`.
 
+### 6. Try it out
+
+1. Sign up at `/signup` — you start with 20 free credits.
+2. Go to `/editor`, write a script, pick an avatar + voice (Hindi/Telugu/Tamil are gated to paid
+   plans), and generate. Without TTS/lip-sync provider credentials configured, the worker falls
+   back to bundled local stub assets so the pipeline still runs end-to-end.
+3. Watch the job move `queued → processing → completed` on `/dashboard`.
+4. Visit `/pricing` to test a Stripe Checkout upgrade (test card `4242 4242 4242 4242`).
+5. On a Pro/Enterprise-tier account, use `/profile` to create a team and invite another
+   (already-registered) account.
+
 ## Running everything with Docker Compose
 
 ```bash
@@ -105,33 +149,26 @@ separately with `npm run dev` (or deploy it to Vercel — see below).
 
 ## Deployment
 
+Full walkthrough (secrets, webhooks, OAuth redirect URIs, migrations, admin promotion, smoke
+test) is in [`DEPLOYMENT.md`](./DEPLOYMENT.md). Short version:
+
 ### Backend → Render
 
-`render.yaml` defines a Render Blueprint with:
-- a managed Postgres database
-- a managed Redis instance
-- a `web` service running the API (`backend/Dockerfile`, health check on `/health`)
-- a `worker` service running the same image with `node dist/videos/videos.worker.js`
+`render.yaml` defines a Blueprint: managed Postgres + Redis, a `web` service running the API
+(health check on `/health`), and a `worker` service running `node dist/videos/videos.worker.js`.
 
 ```bash
 ./scripts/deploy-render.sh
 ```
 
-Or connect the repo in the Render dashboard and click **New Blueprint Instance**, pointing it at
-`render.yaml`. Set the `sync: false` env vars (Stripe keys, AWS credentials, `FRONTEND_URL`) in
-the Render dashboard after the first deploy.
-
 ### Frontend → Vercel
 
 `frontend/vercel.json` configures the Vite build. Set `VITE_API_BASE_URL` to your deployed Render
-API URL (e.g. `https://narrator-api.onrender.com/api`) in the Vercel project's environment
-variables.
+API URL (e.g. `https://narrator-api.onrender.com/api`).
 
 ```bash
 ./scripts/deploy-vercel.sh
 ```
-
-Or connect the repo in the Vercel dashboard with **Root Directory** set to `frontend`.
 
 ## Environment variables
 
@@ -142,20 +179,24 @@ See `backend/.env.example` and `frontend/.env.example` for the full list. Key on
 | `DATABASE_URL` | Postgres connection string |
 | `REDIS_URL` | Redis connection string for the BullMQ queue |
 | `JWT_SECRET` | Signs auth tokens |
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` / `GOOGLE_CALLBACK_URL` | "Continue with Google" — leave blank to disable |
 | `AWS_S3_BUCKET` / `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | Video storage |
 | `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` | Billing |
-| `STRIPE_PRICE_STARTER` / `_PRO` / `_BUSINESS` | Stripe Price IDs per plan tier |
-| `AVATAR_PROVIDER_API_KEY` / `AVATAR_PROVIDER_BASE_URL` | Pluggable avatar/TTS provider — swap `backend/src/videos/avatar-provider.stub.ts` for a real integration |
+| `STRIPE_PRICE_STARTER` / `_PRO` | Stripe Price IDs (₹500 / ₹1,500 tiers; Enterprise is sales-assisted) |
+| `AVATAR_PROVIDER_API_KEY` / `AVATAR_PROVIDER_BASE_URL` | Pluggable TTS + lip-sync provider — swap `backend/src/ai/tts.service.ts` and `lipsync.service.ts` for a real integration |
 
 ## Swapping in a real avatar/TTS provider
 
-`backend/src/videos/avatar-provider.stub.ts` exposes two functions —  `fetchAvatarClip` and
-`renderNarrationAudio` — that the worker calls before invoking FFmpeg. Replace the stub bodies
-with calls to whichever avatar/TTS API you integrate (an internal model, or a third-party
-provider), keeping the same signatures so the render pipeline and queue plumbing don't change.
+`backend/src/ai/tts.service.ts` and `backend/src/ai/lipsync.service.ts` each expose one method
+(`synthesize()` / `generate()`) that the render worker calls. Both fall back to bundled local
+stub assets when `AVATAR_PROVIDER_BASE_URL`/`AVATAR_PROVIDER_API_KEY` aren't set. Point those env
+vars at a real vendor (an ElevenLabs/Azure-style TTS API plus a HeyGen/D-ID-style lip-sync API,
+or an in-house model) and implement the `callProvider()` bodies — the render pipeline and queue
+plumbing don't need to change.
 
 ## Tech stack
 
-- **Frontend**: React 18, Vite, React Router, Axios
-- **Backend**: NestJS, TypeORM (Postgres), BullMQ (Redis), Passport JWT, Stripe SDK, AWS SDK v3, fluent-ffmpeg
+- **Frontend**: React 18, Vite, TailwindCSS, React Router, Axios
+- **Backend**: NestJS, TypeORM (Postgres), BullMQ (Redis), Passport (JWT + Google OAuth), Stripe
+  SDK, AWS SDK v3, fluent-ffmpeg
 - **Infra**: Docker, Render (API + worker + Postgres + Redis), Vercel (frontend)
